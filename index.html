@@ -3,15 +3,31 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f7f6f2" />
+    <meta name="theme-color" content="#f4efdf" />
     <meta
       name="description"
-      content="Art Archive — 一个安静的地方，收藏你的绘画、摄影与速写。无需登录，作品保存在你的浏览器。"
+      content="Art Archive — 一个有颜色的私人艺术空间。收藏作品、策划展览、记录灵感，在昼夜之间自由创作。"
     />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-    <title>Art Archive · 个人艺术档案</title>
-    <script type="module" crossorigin src="./assets/index-B3DKELeI.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-CNtuIcjM.css">
+    <script>
+      {
+        let theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'day';
+        try {
+          const saved = localStorage.getItem('art-archive-theme');
+          if (saved === 'day' || saved === 'night') theme = saved;
+        } catch {
+          /* A blocked preference store does not block theme selection. */
+        }
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme === 'night' ? 'dark' : 'light';
+        document
+          .querySelector('meta[name="theme-color"]')
+          .setAttribute('content', theme === 'night' ? '#1b2430' : '#f4efdf');
+      }
+    </script>
+    <title>Art Archive · 有颜色的私人艺术空间</title>
+    <script type="module" crossorigin src="./assets/index-B9ZwaNDc.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-CMDTyIpg.css">
   </head>
   <body>
     <div id="root"></div>

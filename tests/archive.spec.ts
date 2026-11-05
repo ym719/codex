@@ -157,6 +157,11 @@ test('responsive layout, loaded artwork images and keyboard dialogs', async ({
   page,
 }, testInfo) => {
   await open(page);
+  for (const image of await page.locator('.artwork-frame img').all()) {
+    await image.scrollIntoViewIfNeeded();
+    await expect(image).toHaveJSProperty('complete', true);
+  }
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
   await expect
     .poll(() =>
       page

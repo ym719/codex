@@ -23,7 +23,9 @@ export function selectArtworks(
     .filter(
       (art) =>
         (category === '全部' || art.category === category) &&
-        `${art.title} ${art.medium} ${art.notes}`.toLocaleLowerCase().includes(needle),
+        `${art.title} ${art.medium} ${art.notes} ${art.series ?? ''} ${(art.tags ?? []).join(' ')}`
+          .toLocaleLowerCase()
+          .includes(needle),
     )
     .sort((a, b) =>
       sort === 'added'

@@ -3,6 +3,7 @@ import { ArrowUpRight, ImagePlus, LoaderCircle, Upload } from 'lucide-react';
 import { categories, type Artwork, type ArtworkInput } from '../types';
 import { isValidDate, localDate } from '../lib/artworks';
 import { prepareImage } from '../lib/images';
+import { parseTags } from '../lib/studio';
 import { storageError } from '../lib/db';
 import ArtworkImage from './ArtworkImage';
 import Modal from './Modal';
@@ -21,6 +22,8 @@ export default function ArtworkForm({
   const [category, setCategory] = useState(artwork?.category ?? '绘画');
   const [medium, setMedium] = useState(artwork?.medium ?? '');
   const [notes, setNotes] = useState(artwork?.notes ?? '');
+  const [series, setSeries] = useState(artwork?.series ?? '');
+  const [tags, setTags] = useState((artwork?.tags ?? []).join('，'));
   const [picture, setPicture] = useState<Pick<Artwork, 'image' | 'width' | 'height'> | undefined>(
     artwork ? { image: artwork.image, width: artwork.width, height: artwork.height } : undefined,
   );
@@ -76,6 +79,9 @@ export default function ArtworkForm({
         category,
         medium: medium.trim(),
         notes: notes.trim(),
+        series: series.trim(),
+        tags: parseTags(tags),
+        favorite: artwork?.favorite ?? false,
         ...picture,
       });
     } catch (err) {
@@ -200,6 +206,28 @@ export default function ArtworkForm({
                 disabled={busy}
               />
             </label>
+            <div className="field-row">
+              <label>
+                策展系列
+                <input
+                  value={series}
+                  maxLength={50}
+                  onChange={(e) => setSeries(e.target.value)}
+                  placeholder="例如：夏日观察"
+                  disabled={busy}
+                />
+              </label>
+              <label>
+                作品标签
+                <input
+                  value={tags}
+                  maxLength={200}
+                  onChange={(e) => setTags(e.target.value)}
+                  placeholder="光影，植物，旅行"
+                  disabled={busy}
+                />
+              </label>
+            </div>
             <label>
               创作笔记
               <textarea

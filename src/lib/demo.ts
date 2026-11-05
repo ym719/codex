@@ -83,6 +83,9 @@ export async function createDemoArtworks(): Promise<Artwork[]> {
         id: `sample-${i}`,
         image: await response.blob(),
         isDemo: true,
+        favorite: false,
+        series: i === 0 || i === 3 ? '风景里的光' : i === 1 || i === 4 ? '城市漫游' : '日常小事',
+        tags: i % 2 === 0 ? ['观察', '日常'] : ['光影', '色彩'],
         createdAt: Date.UTC(2026, 5, 20) - i,
         updatedAt: Date.UTC(2026, 5, 20) - i,
       };

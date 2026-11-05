@@ -1,108 +1,119 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowDown,
-  ArrowDownToLine,
-  ArrowRight,
   ArrowUpRight,
+  BookOpen,
   Check,
   ChevronDown,
   Grid2X2,
-  HardDrive,
+  Heart,
+  Layers3,
   LayoutList,
   LoaderCircle,
-  MoreHorizontal,
-  Pencil,
+  Maximize2,
+  Moon,
+  Palette,
   Plus,
   Search,
-  ShieldCheck,
+  Sun,
   Trash2,
-  Upload,
   X,
 } from 'lucide-react';
 import {
   categories,
   type Artwork,
   type ArtworkInput,
+  type ArchiveBackup,
   type Category,
+  type JournalEntry,
+  type PageView,
   type SortOrder,
 } from './types';
 import {
+  assignSeries,
   deleteArtworks,
   getArtworks,
+  getJournals,
   initializeLibrary,
+  removeSeries,
   restoreArtworks,
   saveArtwork,
   storageError,
+  toggleArtworkFavorite,
+  updateJournal,
 } from './lib/db';
-import {
-  countCategories,
-  displayDate,
-  groupByMonth,
-  localDate,
-  selectArtworks,
-} from './lib/artworks';
+import { countCategories, localDate, selectArtworks } from './lib/artworks';
 import { createDemoArtworks } from './lib/demo';
 import { createBackup, downloadFile, readBackup } from './lib/backup';
-import ArtworkImage from './components/ArtworkImage';
+import { useTheme } from './lib/useTheme';
+import { palettes, seriesGroups } from './lib/studio';
 import ArtworkForm from './components/ArtworkForm';
+import ArtworkCard from './components/ArtworkCard';
+import ArtworkDetail from './components/ArtworkDetail';
+import StudioHero, { ArtMark } from './components/StudioHero';
+import ColorLab from './components/ColorLab';
+import Collections, { SeriesEditor } from './components/Collections';
+import { JournalEditor, JournalPage } from './components/Journal';
+import Archive from './components/Archive';
+import About from './components/About';
 import Modal from './components/Modal';
 
 type Confirmation =
   | { kind: 'delete'; artwork: Artwork }
   | { kind: 'clear' }
-  | { kind: 'restore'; artworks: Artwork[] };
-
-function Mark({ small = false }: { small?: boolean }) {
-  return (
-    <svg
-      className={small ? 'brand-mark small' : 'brand-mark'}
-      width="34"
-      height="36"
-      viewBox="0 0 34 36"
-      fill="none"
-      aria-hidden="true"
-    >
-      <path
-        d="M3 32V17a14 14 0 0 1 28 0v15M10 32V17a7 7 0 0 1 14 0v15M3 32h28"
-        stroke="currentColor"
-        strokeWidth="1.8"
-      />
-    </svg>
-  );
-}
+  | { kind: 'restore'; data: ArchiveBackup }
+  | { kind: 'journal'; entry: JournalEntry }
+  | { kind: 'series'; name: string };
+const navigation: { id: PageView; label: string }[] = [
+  { id: 'home', label: '艺术空间' },
+  { id: 'collections', label: '我的策展' },
+  { id: 'archive', label: '创作档案' },
+  { id: 'colors', label: '色彩实验室' },
+  { id: 'journal', label: '灵感手记' },
+];
 
 export default function App() {
+  const { theme, toggleTheme } = useTheme();
   const [artworks, setArtworks] = useState<Artwork[]>([]);
+  const [journals, setJournals] = useState<JournalEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [view, setView] = useState<'collection' | 'archive'>('collection');
+  const [view, setView] = useState<PageView>('home');
   const [category, setCategory] = useState<Category | '全部'>('全部');
   const [sort, setSort] = useState<SortOrder>('newest');
   const [layout, setLayout] = useState<'grid' | 'list'>('grid');
-  const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [selected, setSelected] = useState<Artwork | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const [series, setSeries] = useState('');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [immersive, setImmersive] = useState(false);
   const [editor, setEditor] = useState<Artwork | 'new' | null>(null);
+  const [journalEditor, setJournalEditor] = useState<Partial<JournalEntry> | null>(null);
+  const [seriesEditor, setSeriesEditor] = useState(false);
   const [about, setAbout] = useState(false);
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   const [working, setWorking] = useState(false);
   const [actionError, setActionError] = useState('');
   const [toast, setToast] = useState('');
-  const backupInput = useRef<HTMLInputElement>(null);
   const channel = useRef<BroadcastChannel | null>(null);
-
+  const refresh = useCallback(async (broadcast = true) => {
+    const [arts, notes] = await Promise.all([getArtworks(), getJournals()]);
+    setArtworks(arts);
+    setJournals(notes);
+    if (broadcast) channel.current?.postMessage('updated');
+  }, []);
   const initialize = useCallback(async () => {
     setLoading(true);
     setLoadError('');
     try {
       await initializeLibrary(createDemoArtworks);
-      setArtworks(await getArtworks());
+      await refresh(false);
     } catch (error) {
       setLoadError(storageError(error));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [refresh]);
   useEffect(() => {
     void initialize();
   }, [initialize]);
@@ -111,66 +122,91 @@ export default function App() {
     const next = new BroadcastChannel('art-archive-updates');
     channel.current = next;
     next.onmessage = () => {
-      void getArtworks()
-        .then(setArtworks)
-        .catch(() => setToast('档案同步失败，请刷新重试。'));
+      void refresh(false).catch(() => setToast('同步失败，请刷新页面重试。'));
     };
     return () => {
       next.close();
       channel.current = null;
     };
-  }, []);
+  }, [refresh]);
   useEffect(() => {
     if (toast) {
       const timer = window.setTimeout(() => setToast(''), 5000);
       return () => clearTimeout(timer);
     }
   }, [toast]);
-
   const counts = useMemo(() => countCategories(artworks), [artworks]);
   const visible = useMemo(
-    () => selectArtworks(artworks, category, query, sort),
-    [artworks, category, query, sort],
+    () =>
+      selectArtworks(artworks, category, query, sort).filter(
+        (art) => (!favoritesOnly || art.favorite) && (!series || art.series === series),
+      ),
+    [artworks, category, query, sort, favoritesOnly, series],
   );
-  const groups = useMemo(() => groupByMonth(visible), [visible]);
+  const groups = useMemo(() => seriesGroups(artworks), [artworks]);
+  const favorites = artworks.filter((art) => art.favorite).length;
   const demos = artworks.filter((art) => art.isDemo).length;
-  const years = new Set(artworks.map((art) => art.date.slice(0, 4))).size;
-  const selectedIndex = selected ? visible.findIndex((art) => art.id === selected.id) : -1;
-
-  async function refresh() {
-    setArtworks(await getArtworks());
-    channel.current?.postMessage('updated');
+  const selected = artworks.find((art) => art.id === selectedId);
+  const selectedList = view === 'home' ? visible : selectArtworks(artworks, '全部', '', 'newest');
+  function navigate(next: PageView) {
+    setView(next);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  function resetFilters() {
+    setCategory('全部');
+    setQuery('');
+    setFavoritesOnly(false);
+    setSeries('');
+  }
+  function openCatalog(name = '', onlyFavorites = false) {
+    setView('home');
+    resetFilters();
+    setSeries(name);
+    setFavoritesOnly(onlyFavorites);
+    requestAnimationFrame(() =>
+      document.getElementById('collection')?.scrollIntoView({ behavior: 'smooth' }),
+    );
   }
   function startUpload() {
     setEditor('new');
-    setSelected(null);
+    setSelectedId(null);
   }
-  function navigate(next: 'collection' | 'archive') {
-    setView(next);
+  function openArt(art: Artwork, theater = false) {
+    setSelectedId(art.id);
+    setImmersive(theater);
+  }
+  function openNote(note: Partial<JournalEntry> = {}) {
+    setJournalEditor(note);
   }
   async function save(input: ArtworkInput) {
     const now = Date.now();
     const previous = editor && editor !== 'new' ? editor : null;
-    const artwork: Artwork = {
+    await saveArtwork({
       ...input,
       id: previous?.id ?? crypto.randomUUID(),
       createdAt: previous?.createdAt ?? now,
       updatedAt: now,
       isDemo: false,
-    };
-    await saveArtwork(artwork);
+    });
     await refresh();
     setEditor(null);
-    setCategory('全部');
-    setQuery('');
-    setToast(previous ? '作品已更新' : '新作品已收入你的档案');
+    resetFilters();
+    setToast(previous ? '作品已更新，故事还在继续' : '新作品已收入你的艺术空间');
+  }
+  async function favorite(id: string) {
+    try {
+      await toggleArtworkFavorite(id);
+      await refresh();
+    } catch (error) {
+      setToast(storageError(error));
+    }
   }
   async function exportBackup() {
     setWorking(true);
     setActionError('');
     try {
-      downloadFile(await createBackup(artworks), `art-archive-${localDate()}.json`);
-      setToast('备份已导出，请妥善保存下载的文件');
+      downloadFile(await createBackup(artworks, journals), `art-archive-${localDate()}.json`);
+      setToast('作品与手记已导出，请妥善保管备份');
     } catch (error) {
       setActionError(storageError(error));
     } finally {
@@ -182,39 +218,9 @@ export default function App() {
     setWorking(true);
     setActionError('');
     try {
-      const entries = await readBackup(file);
+      const data = await readBackup(file);
       setAbout(false);
-      setConfirm({ kind: 'restore', artworks: entries });
-    } catch (error) {
-      setActionError(storageError(error));
-    } finally {
-      setWorking(false);
-    }
-  }
-  async function confirmAction() {
-    if (!confirm || working) return;
-    setWorking(true);
-    setActionError('');
-    try {
-      if (confirm.kind === 'restore') await restoreArtworks(confirm.artworks);
-      else
-        await deleteArtworks(
-          confirm.kind === 'delete'
-            ? [confirm.artwork.id]
-            : artworks.filter((a) => a.isDemo).map((a) => a.id),
-        );
-      await refresh();
-      setSelected(null);
-      setConfirm(null);
-      setCategory('全部');
-      setQuery('');
-      setToast(
-        confirm.kind === 'restore'
-          ? '备份已恢复'
-          : confirm.kind === 'clear'
-            ? '示例已清空，开始收藏你的作品吧'
-            : '作品已删除',
-      );
+      setConfirm({ kind: 'restore', data });
     } catch (error) {
       setActionError(storageError(error));
     } finally {
@@ -223,598 +229,641 @@ export default function App() {
   }
   function requestConfirm(next: Confirmation) {
     setActionError('');
-    setSelected(null);
+    setSelectedId(null);
     setConfirm(next);
   }
+  async function confirmAction() {
+    if (!confirm || working) return;
+    setWorking(true);
+    setActionError('');
+    try {
+      if (confirm.kind === 'restore')
+        await restoreArtworks(confirm.data.artworks, confirm.data.journals);
+      else if (confirm.kind === 'journal') await updateJournal(null, confirm.entry.id);
+      else if (confirm.kind === 'series') await removeSeries(confirm.name);
+      else
+        await deleteArtworks(
+          confirm.kind === 'delete'
+            ? [confirm.artwork.id]
+            : artworks.filter((a) => a.isDemo).map((a) => a.id),
+        );
+      await refresh();
+      setConfirm(null);
+      resetFilters();
+      setToast(
+        confirm.kind === 'restore'
+          ? '备份已恢复，欢迎回到你的艺术空间'
+          : confirm.kind === 'series'
+            ? '系列已移除，所有作品仍然保留'
+            : '已完成，给新的灵感留一点空间',
+      );
+    } catch (error) {
+      setActionError(storageError(error));
+    } finally {
+      setWorking(false);
+    }
+  }
+  const confirmationTitle =
+    confirm?.kind === 'delete'
+      ? '删除作品'
+      : confirm?.kind === 'clear'
+        ? '清空示例'
+        : confirm?.kind === 'journal'
+          ? '删除手记'
+          : confirm?.kind === 'series'
+            ? '移除系列'
+            : '恢复备份';
 
   return (
     <>
+      <div className="top-strip">
+        <span>ART IS A WAY OF SEEING.</span>
+        <span>
+          <i /> 你的私人艺术空间 · 作品仅存本地
+        </span>
+        <span>MAKE SOMETHING THAT FEELS LIKE YOU ↗</span>
+      </div>
       <header className="site-header">
         <a
           className="brand"
           href="#"
           aria-label="Art Archive 首页"
-          onClick={(event) => {
-            event.preventDefault();
-            navigate('collection');
-            setCategory('全部');
-            setQuery('');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+          onClick={(e) => {
+            e.preventDefault();
+            resetFilters();
+            navigate('home');
           }}
         >
-          <Mark />
+          <ArtMark />
           <span>
-            Art Archive<span className="brand-subtitle">A PERSONAL COLLECTION</span>
+            Art Archive<small>收藏创作，也收藏生活。</small>
           </span>
         </a>
         <nav aria-label="主导航">
+          {navigation.map((item) => (
+            <button
+              className={`nav-link ${view === item.id ? 'active' : ''}`}
+              key={item.id}
+              aria-current={view === item.id ? 'page' : undefined}
+              onClick={() => navigate(item.id)}
+            >
+              {item.label}
+              {item.id === 'colors' && <i className="nav-new" />}
+            </button>
+          ))}
+        </nav>
+        <div className="header-actions">
           <button
-            className={view === 'collection' ? 'nav-link active' : 'nav-link'}
-            onClick={() => navigate('collection')}
+            className="theme-toggle"
+            aria-label={theme === 'day' ? '切换到夜间主题' : '切换到白天主题'}
+            aria-pressed={theme === 'night'}
+            onClick={toggleTheme}
           >
-            作品集
+            {theme === 'day' ? <Moon size={18} /> : <Sun size={18} />}
+            <span>{theme === 'day' ? '日间' : '夜间'}</span>
           </button>
           <button
-            className={view === 'archive' ? 'nav-link active' : 'nav-link'}
-            onClick={() => navigate('archive')}
+            className="button button-primary header-upload"
+            onClick={startUpload}
+            disabled={loading || !!loadError}
           >
-            创作档案
+            <Plus size={17} />
+            <span>添加作品</span>
           </button>
+        </div>
+      </header>
+      <main>
+        {view === 'home' && (
+          <>
+            <StudioHero
+              theme={theme}
+              onAdd={startUpload}
+              onRandom={() => {
+                resetFilters();
+                openArt(artworks[Math.floor(Math.random() * artworks.length)]);
+              }}
+              disabled={loading || !!loadError}
+              noArt={!artworks.length}
+            />
+            <div className="color-ribbon" aria-hidden="true">
+              <span>COLLECT MOMENTS</span>
+              <i />
+              <span>CREATE WITH FEELING</span>
+              <i />
+              <span>LIVE IN COLOR</span>
+              <i />
+              <span>STAY A LITTLE WILD</span>
+              <i />
+              <span>COLLECT MOMENTS</span>
+            </div>
+            <div className="studio-stats">
+              <button onClick={() => openCatalog()}>
+                <span className="stat-icon">
+                  <Palette size={22} />
+                </span>
+                <div>
+                  <strong>{String(artworks.length).padStart(2, '0')}</strong>
+                  <span>
+                    件作品 <small>每一笔都算数</small>
+                  </span>
+                </div>
+                <ArrowUpRight size={17} />
+              </button>
+              <button onClick={() => openCatalog('', true)}>
+                <span className="stat-icon">
+                  <Heart size={22} />
+                </span>
+                <div>
+                  <strong>{String(favorites).padStart(2, '0')}</strong>
+                  <span>
+                    件心选 <small>值得再看一眼</small>
+                  </span>
+                </div>
+                <ArrowUpRight size={17} />
+              </button>
+              <button onClick={() => navigate('collections')}>
+                <span className="stat-icon">
+                  <Layers3 size={22} />
+                </span>
+                <div>
+                  <strong>{String(groups.length).padStart(2, '0')}</strong>
+                  <span>
+                    个策展系列 <small>让灵感发生关联</small>
+                  </span>
+                </div>
+                <ArrowUpRight size={17} />
+              </button>
+              <button onClick={() => navigate('journal')}>
+                <span className="stat-icon">
+                  <BookOpen size={22} />
+                </span>
+                <div>
+                  <strong>{String(journals.length).padStart(2, '0')}</strong>
+                  <span>
+                    则灵感手记 <small>抓住一闪而过</small>
+                  </span>
+                </div>
+                <ArrowUpRight size={17} />
+              </button>
+            </div>
+          </>
+        )}
+        {loading ? (
+          <div className="empty-state" role="status">
+            <LoaderCircle className="spin" size={30} />
+            <h3>正在打开你的艺术档案…</h3>
+          </div>
+        ) : loadError ? (
+          <div className="empty-state" role="alert">
+            <Palette size={34} />
+            <h3>暂时无法打开本地档案</h3>
+            <p>{loadError}</p>
+            <button className="button button-primary" onClick={() => void initialize()}>
+              重新尝试
+            </button>
+          </div>
+        ) : (
+          <>
+            {view === 'home' && (
+              <>
+                <section id="collection" className="collection-section" aria-label="作品集">
+                  <div className="section-heading">
+                    <div>
+                      <span className="eyebrow">THE COLLECTION / 作品集</span>
+                      <h2>
+                        {series
+                          ? series
+                          : favoritesOnly
+                            ? '偏爱，是最好的策展人。'
+                            : '每一件作品，都有自己的温度。'}
+                        <span className="heading-spark" aria-hidden="true">
+                          ✷
+                        </span>
+                      </h2>
+                    </div>
+                    <button
+                      className="text-link exhibition-link"
+                      onClick={() => openArt(visible[0], true)}
+                      disabled={!visible.length}
+                    >
+                      <Maximize2 size={16} />
+                      沉浸看展 <ArrowUpRight size={16} />
+                    </button>
+                  </div>
+                  <div className="collection-toolbar">
+                    <div className="filter-tabs" role="group" aria-label="作品分类">
+                      {(['全部', ...categories] as const).map((c) => (
+                        <button
+                          key={c}
+                          className={`filter-tab ${category === c ? 'selected' : ''}`}
+                          aria-pressed={category === c}
+                          onClick={() => setCategory(c)}
+                        >
+                          {c === '全部' ? '全部作品' : c}
+                          <span>{c === '全部' ? artworks.length : counts[c]}</span>
+                        </button>
+                      ))}
+                      <button
+                        className={`filter-tab heart-filter ${favoritesOnly ? 'selected' : ''}`}
+                        aria-pressed={favoritesOnly}
+                        onClick={() => setFavoritesOnly(!favoritesOnly)}
+                      >
+                        <Heart size={13} fill={favoritesOnly ? 'currentColor' : 'none'} />
+                        只看心选
+                      </button>
+                    </div>
+                    <div className="view-tools">
+                      <button
+                        className={`icon-button ${searchOpen ? 'is-active' : ''}`}
+                        aria-label={searchOpen ? '关闭搜索' : '搜索作品'}
+                        aria-expanded={searchOpen}
+                        onClick={() => {
+                          setSearchOpen(!searchOpen);
+                          if (searchOpen) setQuery('');
+                        }}
+                      >
+                        <Search size={17} />
+                      </button>
+                      <label className="sort-select">
+                        <select
+                          aria-label="作品排序"
+                          value={sort}
+                          onChange={(e) => setSort(e.target.value as SortOrder)}
+                        >
+                          <option value="newest">创作日期 · 从新到旧</option>
+                          <option value="oldest">创作日期 · 从旧到新</option>
+                          <option value="added">最近添加</option>
+                        </select>
+                        <ChevronDown size={13} />
+                      </label>
+                      <div className="layout-switch" role="group" aria-label="显示方式">
+                        <button
+                          className={`icon-button ${layout === 'grid' ? 'is-active' : ''}`}
+                          aria-label="网格视图"
+                          aria-pressed={layout === 'grid'}
+                          onClick={() => setLayout('grid')}
+                        >
+                          <Grid2X2 size={16} />
+                        </button>
+                        <button
+                          className={`icon-button ${layout === 'list' ? 'is-active' : ''}`}
+                          aria-label="列表视图"
+                          aria-pressed={layout === 'list'}
+                          onClick={() => setLayout('list')}
+                        >
+                          <LayoutList size={17} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  {searchOpen && (
+                    <div className="search-box">
+                      <Search size={18} />
+                      <input
+                        aria-label="搜索作品名称、媒介或笔记"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="搜索作品、媒介、笔记、标签或系列…"
+                        autoFocus
+                      />
+                      <button
+                        className="icon-button"
+                        aria-label="清空搜索"
+                        onClick={() => setQuery('')}
+                        disabled={!query}
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                  )}
+                  {series && (
+                    <div className="active-series">
+                      <Layers3 size={14} />
+                      正在浏览系列：{series}
+                      <button
+                        className="icon-button"
+                        aria-label="清除系列筛选"
+                        onClick={() => setSeries('')}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+                  {demos > 0 && (
+                    <div className="demo-notice">
+                      <span>
+                        <i />
+                        一点灵感，作为开始。<span>当前包含 {demos} 件示例作品。</span>
+                      </span>
+                      <button onClick={() => requestConfirm({ kind: 'clear' })}>
+                        清空示例 <ArrowUpRight size={13} />
+                      </button>
+                    </div>
+                  )}
+                  {visible.length === 0 ? (
+                    <div className="empty-state">
+                      <Palette size={38} strokeWidth={1} />
+                      <span className="eyebrow">ROOM FOR YOUR NEXT LITTLE MASTERPIECE</span>
+                      <h3>
+                        {artworks.length === 0
+                          ? '你的故事，从第一件作品开始。'
+                          : favoritesOnly
+                            ? '把偏爱的作品，留在这里。'
+                            : '还没有找到这件作品。'}
+                      </h3>
+                      <p>
+                        {artworks.length === 0
+                          ? '一张画、一帧光影、一页速写。你的每一次表达，都值得被收藏。'
+                          : favoritesOnly
+                            ? '点击作品上的爱心，即可收入心选收藏。'
+                            : '试试其他分类，或换一个搜索词。'}
+                      </p>
+                      <button
+                        className="button button-primary"
+                        onClick={artworks.length === 0 ? startUpload : resetFilters}
+                      >
+                        {artworks.length === 0 ? '添加第一件作品' : '查看全部作品'}
+                        <ArrowUpRight size={16} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className={`artwork-grid ${layout === 'list' ? 'list-layout' : ''}`}>
+                      {visible.map((art, index) => (
+                        <ArtworkCard
+                          key={art.id}
+                          art={art}
+                          index={index}
+                          onOpen={() => openArt(art)}
+                          onFavorite={() => void favorite(art.id)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {visible.length > 0 && (
+                    <div className="collection-end">
+                      <span />
+                      已展出 {visible.length} 件作品 · 灵感仍在继续
+                      <span />
+                    </div>
+                  )}
+                </section>
+                <section className="inspiration-section">
+                  <div className="section-heading">
+                    <div>
+                      <span className="eyebrow">A LITTLE INSPIRATION / 给灵感加点颜色</span>
+                      <h2>换一种颜色，看看世界。</h2>
+                    </div>
+                    <button className="text-link" onClick={() => navigate('colors')}>
+                      走进色彩实验室 <ArrowUpRight size={17} />
+                    </button>
+                  </div>
+                  <div className="inspiration-cards">
+                    <button
+                      className="movement-card impression"
+                      onClick={() => {
+                        navigate('colors');
+                      }}
+                    >
+                      <div>
+                        <span className="eyebrow">01 / CHASING THE LIGHT</span>
+                        <h3>
+                          像印象派一样，
+                          <br />
+                          捕捉转瞬的光。
+                        </h3>
+                        <p>柔和的色彩，不柔弱的表达。</p>
+                        <span className="movement-link">
+                          寻找光影的颜色 <ArrowUpRight size={19} />
+                        </span>
+                      </div>
+                      <div className="movement-art lily-art" aria-hidden="true">
+                        <i />
+                        <i />
+                        <i />
+                        <i />
+                        <i />
+                        <i />
+                        <i />
+                        <i />
+                      </div>
+                    </button>
+                    <button className="movement-card fauvism" onClick={() => navigate('colors')}>
+                      <div>
+                        <span className="eyebrow">02 / FEELING OVER REALITY</span>
+                        <h3>
+                          像野兽派一样，
+                          <br />
+                          让颜色先开口。
+                        </h3>
+                        <p>把真实交给眼睛，把大胆交给自己。</p>
+                        <span className="movement-link">
+                          试试更自由的色彩 <ArrowUpRight size={19} />
+                        </span>
+                      </div>
+                      <div className="movement-art wild-art" aria-hidden="true">
+                        <i />
+                        <i />
+                        <i />
+                        <i />
+                        <i />
+                      </div>
+                    </button>
+                  </div>
+                </section>
+                <section className="daily-note">
+                  <span className="daily-mark" aria-hidden="true">
+                    “
+                  </span>
+                  <div>
+                    <span className="eyebrow">A SMALL INVITATION</span>
+                    <h2>今天，给自己一点创作的时间。</h2>
+                    <p>不必等待灵感，只需记录眼前的一点点美好。</p>
+                  </div>
+                  <button
+                    className="button button-ink"
+                    onClick={() =>
+                      openNote({
+                        title: '今天的一点观察',
+                        body: palettes[0].prompt,
+                        colors: palettes[0].colors,
+                      })
+                    }
+                  >
+                    <PencilIcon />
+                    写一则灵感 <ArrowUpRight size={16} />
+                  </button>
+                </section>
+              </>
+            )}
+            {view === 'collections' && (
+              <Collections
+                artworks={artworks}
+                onOpen={openCatalog}
+                onCreate={() => setSeriesEditor(true)}
+                onDelete={(name) => requestConfirm({ kind: 'series', name })}
+              />
+            )}
+            {view === 'archive' && <Archive artworks={artworks} onSelect={(art) => openArt(art)} />}
+            {view === 'colors' && <ColorLab onNote={openNote} onMessage={setToast} />}
+            {view === 'journal' && (
+              <JournalPage
+                entries={journals}
+                onAdd={() => openNote()}
+                onEdit={openNote}
+                onDelete={(entry) => requestConfirm({ kind: 'journal', entry })}
+                onColors={() => navigate('colors')}
+              />
+            )}
+          </>
+        )}
+        <section className="closing-note">
+          <ArtMark />
+          <p>
+            Make art. <em>Make it yours.</em>
+          </p>
+          <span>不必成为谁，只管大胆表达。</span>
+        </section>
+      </main>
+      <footer className="site-footer">
+        <div className="footer-top">
+          <a
+            className="brand"
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('home');
+            }}
+          >
+            <ArtMark />
+            <span>
+              Art Archive<small>一个有颜色的私人艺术空间。</small>
+            </span>
+          </a>
+          <div className="footer-links">
+            <button onClick={() => navigate('colors')}>色彩实验室</button>
+            <button onClick={() => navigate('journal')}>灵感手记</button>
+            <button
+              onClick={() => {
+                setActionError('');
+                setAbout(true);
+              }}
+            >
+              关于与备份
+            </button>
+          </div>
+        </div>
+        <div className="footer-bottom">
+          <span>© {new Date().getFullYear()} Art Archive · Made for the art of living.</span>
           <button
-            className="nav-link about-nav"
+            className="local-note"
             onClick={() => {
               setActionError('');
               setAbout(true);
             }}
           >
-            关于
+            <i />
+            作品仅保存在此浏览器 <ArrowUpRight size={12} />
           </button>
-        </nav>
-        <button
-          className="button button-dark header-upload"
-          onClick={startUpload}
-          disabled={loading || !!loadError}
-        >
-          <Plus size={17} />
-          <span>添加作品</span>
-        </button>
-      </header>
-
-      <main>
-        <section className="hero" aria-labelledby="hero-title">
-          <div className="hero-copy">
-            <div className="eyebrow">
-              <span className="tiny-line" />{' '}
-              {view === 'collection' ? 'YOUR ART. YOUR STORY.' : 'A JOURNEY IN THE MAKING.'}
-            </div>
-            <h1 id="hero-title">
-              {view === 'collection' ? (
-                <>
-                  Every work,
-                  <br />a little <em>of you.</em>
-                  <svg
-                    className="hero-period"
-                    width="46"
-                    height="46"
-                    viewBox="0 0 46 46"
-                    aria-hidden="true"
-                  >
-                    <path
-                      d="M23 3v40M3 23h40M9 9l28 28M9 37L37 9"
-                      stroke="currentColor"
-                      strokeWidth="2.2"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                </>
-              ) : (
-                <>
-                  A life told
-                  <br />
-                  in <em>little moments.</em>
-                </>
-              )}
-            </h1>
-            <p>
-              {view === 'collection'
-                ? '为灵感留一处空间，为创作留一份记录。'
-                : '沿着时间，重新遇见每一次创作。'}
-              <br />
-              <span>
-                {view === 'collection'
-                  ? '这里，收藏你的每一次看见与表达。'
-                  : '那些微小的进步，都在这里留下痕迹。'}
-              </span>
-            </p>
-          </div>
-          <aside className="collection-summary">
-            <div className="summary-caption">
-              <span className="status-dot" /> YOUR GROWING ARCHIVE
-              <span className="summary-number">№ 001</span>
-            </div>
-            <div className="total-stat">
-              <span>{String(artworks.length).padStart(2, '0')}</span>
-              <div>
-                件作品<span>A collection of moments</span>
-              </div>
-              <ArrowDown size={22} strokeWidth={1} />
-            </div>
-            <div className="category-stats">
-              {categories.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => {
-                    setCategory(c);
-                    document.getElementById('collection')?.scrollIntoView({ behavior: 'smooth' });
-                  }}
-                  aria-label={`查看${c}，${counts[c]}件`}
-                >
-                  <span>{c}</span>
-                  <strong>{String(counts[c]).padStart(2, '0')}</strong>
-                </button>
-              ))}
-            </div>
-            <p>
-              慢慢创作，慢慢收藏。
-              <span>
-                EST.{' '}
-                {artworks.length
-                  ? [...artworks].sort((a, b) => a.date.localeCompare(b.date))[0].date.slice(0, 4)
-                  : new Date().getFullYear()}
-              </span>
-            </p>
-          </aside>
-        </section>
-
-        <section
-          id="collection"
-          className="collection-section"
-          aria-label={view === 'collection' ? '作品集' : '创作档案'}
-        >
-          <div className="section-title">
-            <h2>{view === 'collection' ? '所有的灵感，都在这里。' : '创作，是一条慢慢走的路。'}</h2>
-            <span>{view === 'collection' ? 'THE COLLECTION' : 'THE CHRONICLE'}</span>
-          </div>
-          <div className="collection-toolbar">
-            <div className="filter-tabs" role="group" aria-label="作品分类">
-              {(['全部', ...categories] as const).map((c) => (
-                <button
-                  key={c}
-                  className={category === c ? 'filter-tab selected' : 'filter-tab'}
-                  aria-pressed={category === c}
-                  onClick={() => setCategory(c)}
-                >
-                  {c === '全部' ? '全部作品' : c}
-                  <span>{c === '全部' ? artworks.length : counts[c]}</span>
-                </button>
-              ))}
-            </div>
-            <div className="view-tools">
-              <button
-                className={`icon-button ${searchOpen ? 'is-active' : ''}`}
-                aria-label={searchOpen ? '关闭搜索' : '搜索作品'}
-                aria-expanded={searchOpen}
-                onClick={() => {
-                  setSearchOpen(!searchOpen);
-                  if (searchOpen) setQuery('');
-                }}
-              >
-                <Search size={18} />
-              </button>
-              {view === 'collection' && (
-                <>
-                  <span className="tool-divider" />
-                  <label className="sort-select">
-                    <select
-                      aria-label="作品排序"
-                      value={sort}
-                      onChange={(e) => setSort(e.target.value as SortOrder)}
-                    >
-                      <option value="newest">创作日期 · 从新到旧</option>
-                      <option value="oldest">创作日期 · 从旧到新</option>
-                      <option value="added">最近添加</option>
-                    </select>
-                    <ChevronDown size={13} />
-                  </label>
-                  <span className="tool-divider" />
-                  <div className="layout-switch" role="group" aria-label="显示方式">
-                    <button
-                      className={`icon-button ${layout === 'grid' ? 'is-active' : ''}`}
-                      aria-label="网格视图"
-                      aria-pressed={layout === 'grid'}
-                      onClick={() => setLayout('grid')}
-                    >
-                      <Grid2X2 size={16} />
-                    </button>
-                    <button
-                      className={`icon-button ${layout === 'list' ? 'is-active' : ''}`}
-                      aria-label="列表视图"
-                      aria-pressed={layout === 'list'}
-                      onClick={() => setLayout('list')}
-                    >
-                      <LayoutList size={17} />
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-          {searchOpen && (
-            <div className="search-box">
-              <Search size={19} />
-              <input
-                aria-label="搜索作品名称、媒介或笔记"
-                placeholder="搜索作品名称、媒介或笔记…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                autoFocus
-              />
-              <button
-                className="icon-button"
-                aria-label="清空搜索"
-                onClick={() => setQuery('')}
-                disabled={!query}
-              >
-                <X size={17} />
-              </button>
-            </div>
-          )}
-          {demos > 0 && !loading && (
-            <div className="demo-notice">
-              <span>
-                <span className="demo-dot" /> 一点灵感，作为开始。
-                <span className="demo-explanation">当前包含 {demos} 件示例作品。</span>
-              </span>
-              <button onClick={() => requestConfirm({ kind: 'clear' })}>
-                清空示例 <ArrowUpRight size={13} />
-              </button>
-            </div>
-          )}
-          {loading ? (
-            <div className="empty-state" role="status">
-              <LoaderCircle className="spin" size={28} />
-              <h3>正在打开你的艺术档案…</h3>
-            </div>
-          ) : loadError ? (
-            <div className="empty-state" role="alert">
-              <HardDrive size={32} />
-              <h3>暂时无法打开本地档案</h3>
-              <p>{loadError}</p>
-              <button className="button button-dark" onClick={() => void initialize()}>
-                重新尝试
-              </button>
-            </div>
-          ) : visible.length === 0 ? (
-            <div className="empty-state">
-              <span className="empty-illustration">
-                <Mark />
-              </span>
-              <span className="eyebrow">SPACE FOR SOMETHING GOOD</span>
-              <h3>
-                {artworks.length === 0 ? '你的故事，从第一件作品开始。' : '还没有找到这件作品。'}
-              </h3>
-              <p>
-                {artworks.length === 0
-                  ? '一张画、一帧光影、一页随手的速写。把喜欢的创作留在这里。'
-                  : '试试其他分类，或换一个搜索词。'}
-              </p>
-              <button
-                className="button button-dark"
-                onClick={
-                  artworks.length === 0
-                    ? startUpload
-                    : () => {
-                        setCategory('全部');
-                        setQuery('');
-                      }
-                }
-              >
-                {artworks.length === 0 ? '添加第一件作品' : '查看全部作品'}
-                <Plus size={16} />
-              </button>
-            </div>
-          ) : view === 'archive' ? (
-            <div className="timeline">
-              {groups.map((group) => (
-                <section className="timeline-group" key={group.month}>
-                  <div className="timeline-label">
-                    <span>{group.month.slice(0, 4)}</span>
-                    <h3>{Number(group.month.slice(5))} 月</h3>
-                    <small>{group.artworks.length} 件作品</small>
-                  </div>
-                  <div className="timeline-artworks">
-                    {group.artworks.map((art) => (
-                      <button
-                        className="timeline-card"
-                        key={art.id}
-                        onClick={() => setSelected(art)}
-                      >
-                        <ArtworkImage artwork={art} />
-                        <div>
-                          <span className="eyebrow">{displayDate(art.date)}</span>
-                          <h3>{art.title}</h3>
-                          <p>
-                            {art.category} <span>·</span> {art.medium || '媒介未记录'}
-                          </p>
-                        </div>
-                        <ArrowUpRight size={18} />
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </div>
-          ) : (
-            <div className={`artwork-grid ${layout === 'list' ? 'list-layout' : ''}`}>
-              {visible.map((art, index) => (
-                <article
-                  className="artwork-card"
-                  key={art.id}
-                  style={{ animationDelay: `${Math.min(index, 8) * 45}ms` }}
-                >
-                  <button
-                    className="artwork-open"
-                    onClick={() => setSelected(art)}
-                    aria-label={`查看作品：${art.title}`}
-                  >
-                    <div className={`artwork-frame frame-${index % 3}`}>
-                      <ArtworkImage artwork={art} eager={index < 3} />
-                      <span className="artwork-peek">
-                        <ArrowUpRight size={21} strokeWidth={1.5} />
-                      </span>
-                      {art.isDemo && <span className="sample-label">示例</span>}
-                    </div>
-                    <div className="artwork-meta">
-                      <div>
-                        <h3>{art.title}</h3>
-                        <p>{art.medium || art.category}</p>
-                      </div>
-                      <time dateTime={art.date}>{displayDate(art.date)}</time>
-                    </div>
-                  </button>
-                  <button
-                    className="card-menu icon-button"
-                    aria-label={`管理作品：${art.title}`}
-                    onClick={() => setSelected(art)}
-                  >
-                    <MoreHorizontal size={18} />
-                  </button>
-                </article>
-              ))}
-            </div>
-          )}
-          {!loading && !loadError && visible.length > 0 && (
-            <div className="collection-end">
-              <span className="end-line" />
-              <span>已收藏 {artworks.length} 件作品，灵感仍在继续</span>
-              <span className="end-line" />
-            </div>
-          )}
-        </section>
-        <section className="closing-note">
-          <span className="eyebrow">MAKE ROOM FOR YOUR CREATIVITY</span>
-          <p>
-            Keep creating. <em>Keep a little.</em>
-          </p>
-          <button className="text-link" onClick={startUpload} disabled={loading || !!loadError}>
-            收藏下一份灵感 <ArrowRight size={17} />
-          </button>
-        </section>
-      </main>
-      <footer className="site-footer">
-        <div className="footer-brand">
-          <Mark small />
-          <span>Art Archive</span>
-          <span className="footer-caption">给创作一个安静的角落。</span>
+          <span>STAY CURIOUS. STAY COLORFUL.</span>
         </div>
-        <button
-          className="local-note"
-          onClick={() => {
-            setActionError('');
-            setAbout(true);
-          }}
-        >
-          <span className="status-dot" /> 作品仅保存在此浏览器 <ArrowUpRight size={12} />
-        </button>
-        <span className="footer-year">© {new Date().getFullYear()} Art Archive</span>
+        <div className="footer-colors" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+          <i />
+          <i />
+        </div>
       </footer>
-
       {editor && (
         <ArtworkForm
           artwork={editor === 'new' ? undefined : editor}
-          onClose={() => setEditor(null)}
           onSave={save}
+          onClose={() => setEditor(null)}
         />
       )}
       {selected && (
-        <Modal title={selected.title} onClose={() => setSelected(null)} className="detail-modal">
-          <div className="detail-image">
-            <ArtworkImage artwork={selected} eager />
-          </div>
-          <div className="detail-info">
-            <span className="eyebrow">
-              {selected.category} {selected.isDemo && ' / 示例作品'}
-            </span>
-            <h2>{selected.title}</h2>
-            <time dateTime={selected.date}>{displayDate(selected.date)}</time>
-            <dl>
-              <div>
-                <dt>创作媒介</dt>
-                <dd>{selected.medium || '尚未记录'}</dd>
-              </div>
-              <div>
-                <dt>图片尺寸</dt>
-                <dd>
-                  {selected.width} × {selected.height} px
-                </dd>
-              </div>
-            </dl>
-            <div className="detail-notes">
-              <h3>创作笔记</h3>
-              <p>{selected.notes || '有些作品，无需言语。也可以编辑作品，补上一段创作笔记。'}</p>
-            </div>
-            {selected.isDemo && (
-              <p className="sample-info">
-                这是一张原创 SVG
-                示意作品，用于展示收藏效果。摄影类别使用构图示意图。你可以清空示例，加入自己的创作。
-              </p>
-            )}
-            <div className="detail-actions">
-              <button
-                className="button button-dark"
-                onClick={() => {
-                  setEditor(selected);
-                  setSelected(null);
-                }}
-              >
-                <Pencil size={15} /> 编辑作品
-              </button>
-              <button
-                className="icon-button danger-text"
-                aria-label="删除作品"
-                onClick={() => requestConfirm({ kind: 'delete', artwork: selected })}
-              >
-                <Trash2 size={18} />
-              </button>
-            </div>
-            <div className="detail-pagination">
-              <span>
-                {selectedIndex >= 0
-                  ? `${String(selectedIndex + 1).padStart(2, '0')} / ${String(visible.length).padStart(2, '0')}`
-                  : '当前作品'}
-              </span>
-              <div>
-                <button
-                  className="icon-button"
-                  aria-label="上一件作品"
-                  disabled={selectedIndex <= 0}
-                  onClick={() => setSelected(visible[selectedIndex - 1])}
-                >
-                  <ArrowRight className="rotate" size={18} />
-                </button>
-                <button
-                  className="icon-button"
-                  aria-label="下一件作品"
-                  disabled={selectedIndex < 0 || selectedIndex >= visible.length - 1}
-                  onClick={() => setSelected(visible[selectedIndex + 1])}
-                >
-                  <ArrowRight size={18} />
-                </button>
-              </div>
-            </div>
-          </div>
-        </Modal>
+        <ArtworkDetail
+          artwork={selected}
+          artworks={selectedList.some((a) => a.id === selected.id) ? selectedList : artworks}
+          immersive={immersive}
+          onSelect={(art) => setSelectedId(art.id)}
+          onClose={() => setSelectedId(null)}
+          onEdit={() => {
+            setEditor(selected);
+            setSelectedId(null);
+          }}
+          onDelete={() => requestConfirm({ kind: 'delete', artwork: selected })}
+          onFavorite={() => void favorite(selected.id)}
+        />
+      )}
+      {journalEditor && (
+        <JournalEditor
+          entry={journalEditor}
+          onClose={() => setJournalEditor(null)}
+          onSave={async (entry) => {
+            await updateJournal(entry, entry.id);
+            await refresh();
+            setJournalEditor(null);
+            navigate('journal');
+            setToast('灵感已留下，随时回来继续');
+          }}
+        />
+      )}
+      {seriesEditor && (
+        <SeriesEditor
+          artworks={artworks}
+          onClose={() => setSeriesEditor(false)}
+          onSave={async (ids, name) => {
+            await assignSeries(ids, name);
+            await refresh();
+            setSeriesEditor(false);
+            navigate('collections');
+            setToast('新的策展系列已经准备好');
+          }}
+        />
       )}
       {about && (
-        <Modal
-          title="关于 Art Archive"
-          onClose={() => setAbout(false)}
-          className="about-modal"
+        <About
+          count={artworks.length}
+          journals={journals.length}
           busy={working}
-        >
-          <Mark />
-          <span className="eyebrow">A QUIET HOME FOR YOUR ART</span>
-          <h2>
-            属于你的，
-            <br />
-            小小艺术档案馆。
-          </h2>
-          <p className="about-intro">
-            不必是完成的杰作，也不必被谁认可。
-            <br />
-            每一份创作，都值得被认真收藏。
-          </p>
-          <div className="about-stats">
-            <div>
-              <strong>{artworks.length}</strong>
-              <span>件作品</span>
-            </div>
-            <div>
-              <strong>{categories.filter((c) => counts[c] > 0).length}</strong>
-              <span>种表达</span>
-            </div>
-            <div>
-              <strong>{years}</strong>
-              <span>个创作年份</span>
-            </div>
-          </div>
-          <div className="privacy-note">
-            <ShieldCheck size={23} />
-            <div>
-              <h3>你的作品，由你保管。</h3>
-              <p>
-                图片和信息通过 IndexedDB
-                保存在当前浏览器，不会上传到服务器。清除网站数据、更换浏览器或设备后，作品不会自动转移。隐私模式的数据可能在关闭窗口后消失。
-              </p>
-              <p>请定期导出备份；在其他设备打开本站后，可用备份恢复收藏。</p>
-            </div>
-          </div>
-          <div className="backup-actions">
-            <button
-              className="button button-dark"
-              disabled={working}
-              onClick={() => void exportBackup()}
-            >
-              <ArrowDownToLine size={16} />
-              {working ? '正在处理…' : '导出完整备份'}
-            </button>
-            <button
-              className="button button-outline"
-              disabled={working}
-              onClick={() => backupInput.current?.click()}
-            >
-              <Upload size={16} />
-              从备份恢复
-            </button>
-          </div>
-          <input
-            className="sr-only"
-            type="file"
-            accept="application/json,.json"
-            ref={backupInput}
-            aria-label="导入备份文件"
-            onChange={(e) => {
-              void importBackup(e.target.files?.[0]);
-              e.target.value = '';
-            }}
-          />
-          {actionError && (
-            <p className="form-error" role="alert">
-              {actionError}
-            </p>
-          )}
-          <p className="about-footnote">无需账号 · 无需订阅 · 留给创作的空间</p>
-        </Modal>
+          error={actionError}
+          onClose={() => setAbout(false)}
+          onExport={() => void exportBackup()}
+          onImport={(file) => void importBackup(file)}
+        />
       )}
       {confirm && (
         <Modal
-          title={
-            confirm.kind === 'delete'
-              ? '删除作品'
-              : confirm.kind === 'clear'
-                ? '清空示例'
-                : '恢复备份'
-          }
+          title={confirmationTitle}
           onClose={() => setConfirm(null)}
-          className="confirm-modal"
           busy={working}
+          className="confirm-modal"
         >
           <span className="confirm-icon">
-            {confirm.kind === 'restore' ? <HardDrive size={24} /> : <Trash2 size={24} />}
+            <Trash2 size={24} />
           </span>
           <h2>
             {confirm.kind === 'delete'
               ? '和这件作品告别？'
               : confirm.kind === 'clear'
                 ? '为你的创作腾出空间。'
-                : '用备份恢复你的收藏？'}
+                : confirm.kind === 'journal'
+                  ? '删除这则灵感手记？'
+                  : confirm.kind === 'series'
+                    ? '移除这个策展系列？'
+                    : '用备份恢复你的收藏？'}
           </h2>
           <p>
             {confirm.kind === 'delete'
               ? `「${confirm.artwork.title}」的图片和记录会从此浏览器删除，此操作无法撤销。`
               : confirm.kind === 'clear'
-                ? `将删除 ${demos} 件示例作品。你自己上传或编辑过的作品会保留。此操作无法撤销。`
-                : `备份中的 ${confirm.artworks.length} 件作品将替换当前 ${artworks.length} 件作品。建议先导出当前收藏；恢复后无法撤销。`}
+                ? `将删除 ${demos} 件示例作品。你自己上传、编辑或加入策展系列的作品会保留。此操作无法撤销。`
+                : confirm.kind === 'journal'
+                  ? `「${confirm.entry.title}」将被永久删除，此操作无法撤销。`
+                  : confirm.kind === 'series'
+                    ? `仅移除「${confirm.name}」的分组关系，所有作品及图片都会保留。`
+                    : `备份中的 ${confirm.data.artworks.length} 件作品将替换当前 ${artworks.length} 件作品，同时用 ${confirm.data.journals.length} 则手记替换当前 ${journals.length} 则手记。旧版备份不含手记。建议先导出当前收藏；恢复后无法撤销。`}
           </p>
           {actionError && (
             <p className="form-error" role="alert">
@@ -830,17 +879,19 @@ export default function App() {
               取消
             </button>
             <button
-              className={`button ${confirm.kind === 'restore' ? 'button-dark' : 'button-danger'}`}
+              className="button button-danger"
               disabled={working}
               onClick={() => void confirmAction()}
             >
               {working
                 ? '正在处理…'
-                : confirm.kind === 'delete'
+                : confirm.kind === 'delete' || confirm.kind === 'journal'
                   ? '确认删除'
                   : confirm.kind === 'clear'
                     ? '确认清空示例'
-                    : '确认恢复'}
+                    : confirm.kind === 'series'
+                      ? '确认移除'
+                      : '确认恢复'}
             </button>
           </div>
         </Modal>
@@ -856,4 +907,7 @@ export default function App() {
       )}
     </>
   );
+}
+function PencilIcon() {
+  return <BookOpen size={16} />;
 }

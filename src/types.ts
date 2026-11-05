@@ -13,6 +13,23 @@ export interface Artwork {
   createdAt: number;
   updatedAt: number;
   isDemo: boolean;
+  favorite?: boolean;
+  series?: string;
+  tags?: string[];
 }
 export type ArtworkInput = Omit<Artwork, 'id' | 'createdAt' | 'updatedAt' | 'isDemo'>;
 export type SortOrder = 'newest' | 'oldest' | 'added';
+export type Theme = 'day' | 'night';
+export type PageView = 'home' | 'collections' | 'archive' | 'colors' | 'journal';
+export interface JournalEntry {
+  id: string;
+  title: string;
+  body: string;
+  date: string;
+  colors: string[];
+  updatedAt: number;
+}
+export interface ArchiveBackup {
+  artworks: Artwork[];
+  journals: JournalEntry[];
+}

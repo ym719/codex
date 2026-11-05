@@ -1,4 +1,4 @@
-import type { Artwork } from '../types';
+import type { Artwork, JournalEntry } from '../types';
 
 const DB_NAME = 'art-archive';
 let connection: Promise<IDBDatabase> | undefined;
@@ -90,13 +90,17 @@ export async function deleteArtworks(ids: string[]): Promise<void> {
   ids.forEach((id) => tx.objectStore('artworks').delete(id));
   await done;
 }
-export async function restoreArtworks(artworks: Artwork[]): Promise<void> {
+export async function restoreArtworks(
+  artworks: Artwork[],
+  journals?: JournalEntry[],
+): Promise<void> {
   const db = await openDB();
   const tx = db.transaction(['artworks', 'settings'], 'readwrite');
   const done = finished(tx);
   tx.objectStore('artworks').clear();
   artworks.forEach((artwork) => tx.objectStore('artworks').put(artwork));
   tx.objectStore('settings').put(true, 'initialized');
+  if (journals !== undefined) tx.objectStore('settings').put(journals, 'journals');
   await done;
 }
 export function storageError(error: unknown): string {
@@ -105,4 +109,62 @@ export function storageError(error: unknown): string {
   return error instanceof Error
     ? error.message
     : '暂时无法访问本地档案，请检查浏览器是否允许本地存储后重试。';
+}
+
+export async function getJournals(): Promise<JournalEntry[]> {
+  const db = await openDB();
+  return (await result(db.transaction('settings').objectStore('settings').get('journals'))) ?? [];
+}
+export async function updateJournal(entry: JournalEntry | null, id: string): Promise<void> {
+  const db = await openDB();
+  const tx = db.transaction('settings', 'readwrite');
+  const done = finished(tx);
+  const store = tx.objectStore('settings');
+  const request = store.get('journals');
+  request.onsuccess = () => {
+    const entries: JournalEntry[] = (request.result ?? []).filter(
+      (item: JournalEntry) => item.id !== id,
+    );
+    if (entry) entries.unshift(entry);
+    store.put(entries, 'journals');
+  };
+  await done;
+}
+export async function toggleArtworkFavorite(id: string): Promise<void> {
+  const db = await openDB();
+  const tx = db.transaction('artworks', 'readwrite');
+  const done = finished(tx);
+  const store = tx.objectStore('artworks');
+  const request = store.get(id);
+  request.onsuccess = () => {
+    if (request.result) store.put({ ...request.result, favorite: !request.result.favorite });
+  };
+  await done;
+}
+
+export async function assignSeries(ids: string[], name: string): Promise<void> {
+  const db = await openDB();
+  const tx = db.transaction('artworks', 'readwrite');
+  const done = finished(tx);
+  const store = tx.objectStore('artworks');
+  ids.forEach((id) => {
+    const request = store.get(id);
+    request.onsuccess = () => {
+      if (request.result)
+        store.put({ ...request.result, series: name, isDemo: false, updatedAt: Date.now() });
+    };
+  });
+  await done;
+}
+export async function removeSeries(name: string): Promise<void> {
+  const db = await openDB();
+  const tx = db.transaction('artworks', 'readwrite');
+  const done = finished(tx);
+  const store = tx.objectStore('artworks');
+  const request = store.getAll();
+  request.onsuccess = () =>
+    request.result
+      .filter((art) => art.series === name)
+      .forEach((art) => store.put({ ...art, series: '' }));
+  await done;
 }

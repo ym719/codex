@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode, type KeyboardEventHandler } from 'react';
 import { X } from 'lucide-react';
 
 export default function Modal({
@@ -7,12 +7,14 @@ export default function Modal({
   children,
   className = '',
   busy = false,
+  onKeyDown,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   className?: string;
   busy?: boolean;
+  onKeyDown?: KeyboardEventHandler<HTMLDialogElement>;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -32,6 +34,7 @@ export default function Modal({
       ref={ref}
       className={`modal ${className}`}
       aria-label={title}
+      onKeyDown={onKeyDown}
       onCancel={(event) => {
         event.preventDefault();
         if (!busy) onClose();
